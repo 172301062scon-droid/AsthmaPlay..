@@ -1,0 +1,70 @@
+name: Build AsthmaPlay Android
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-debug-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # Unzips the zip file(s) in the repo root, then finds the project inside.
+      - name: Unzip and locate project
+        run: |
+          mkdir -p /tmp/src
+          for z in ./*.zip; do
+            [ -e "$z" ] && unzip -q -o "$z" -d /tmp/src
+          done
+          GRADLEW=$(find /tmp/src ./ -name gradlew -not -path "./.git/*" | head -n 1)
+          if [ -z "$GRADLEW" ]; then
+            echo "gradlew not found. Repo contents:"; ls -la; exit 1
+          fi
+          DIR=$(dirname "$GRADLEW")
+          echo "Project dir: $DIR"
+          echo "PROJECT_DIR=$DIR" >> $GITHUB_ENV
+          chmod +x "$GRADLEW"
+
+      - name: Create debug keystore
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ ! -f debug.keystore ]; then
+            keytool -genkeypair -v -keystore debug.keystore \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Create .env
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY=$GEMINI_API_KEY" > .env
+          fi
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AsthmaPlay-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
